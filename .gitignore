@@ -1,0 +1,8 @@
+node_modules
+dist
+frontend/dist
+backend/dist
+.env
+.DS_Store
+npm-debug.log*
+GTFS_static_data/gtfs_supplemented/stop_times.txt
