@@ -11,7 +11,13 @@ import TransitMetrics from "./components/TransitMetrics.jsx";
 import LanguageSwitcher from "./components/LanguageSwitcher.jsx";
 import RouteGuidePanel from "./components/RouteGuidePanel.jsx";
 import PreferencesPage from "./components/PreferencesPage.jsx";
-import { fetchFeedList, fetchFeedSnapshot, fetchAccessibility, fetchRouteShapes } from "./api/mtaApi.js";
+import {
+  fetchFeedList,
+  fetchFeedSnapshot,
+  fetchAccessibility,
+  fetchRouteShapes,
+  fetchRouteStops
+} from "./api/mtaApi.js";
 import { mockData } from "./data/mockData.js";
 import "./styles/app.css";
 
@@ -42,6 +48,8 @@ function App() {
   const [plannedRoute, setPlannedRoute] = useState(null);
   const [displayedRoutes, setDisplayedRoutes] = useState(mockData.routes);
   const [routeShapes, setRouteShapes] = useState({});
+  const [routeStopsMap, setRouteStopsMap] = useState({});
+  const [stopRoutesMap, setStopRoutesMap] = useState({});
   const emptyAccessibility = useMemo(
     () => ({ currentOutages: [], upcomingOutages: [], equipments: [] }),
     []
@@ -80,6 +88,15 @@ function App() {
   const routeFavorites = mockData.favorites.filter(
     (fav) => fav.routeId === selectedRoute
   );
+
+  const stationTranslations = useMemo(() => {
+    const map = new Map();
+    mockData.stationNames.forEach((entry) => {
+      const key = `${entry.stationId}:${entry.languageCode}`;
+      map.set(key, entry.localizedName);
+    });
+    return map;
+  }, []);
 
   const activeAlerts = mockData.alerts
     .filter((alert) => alert.routeId === selectedRoute)
@@ -141,6 +158,15 @@ function App() {
     fetchRouteShapes()
       .then((shapes) => setRouteShapes(shapes))
       .catch(() => setRouteShapes({}));
+    fetchRouteStops()
+      .then(({ routeStops, stopRoutes }) => {
+        setRouteStopsMap(routeStops);
+        setStopRoutesMap(stopRoutes);
+      })
+      .catch(() => {
+        setRouteStopsMap({});
+        setStopRoutesMap({});
+      });
   }, []);
 
   useEffect(() => {
@@ -196,13 +222,14 @@ function App() {
       const incoming = feedSnapshot.routes.map((routeId) => {
         const preset = mockData.routes.find((r) => r.routeId === routeId);
         const geometry = routeShapes[routeId] || preset?.geometry || [];
+        const stationIds = routeStopsMap[routeId] || preset?.stationIds || [];
         return (
           preset || {
             routeId,
             shortName: `${routeId} Line`,
             longName: `${routeId} Line`,
             geometry,
-            stationIds: []
+            stationIds
           }
         );
       });
@@ -213,14 +240,15 @@ function App() {
     } else {
       const routesWithShapes = mockData.routes.map((r) => ({
         ...r,
-        geometry: r.geometry && r.geometry.length ? r.geometry : routeShapes[r.routeId] || []
+        geometry: r.geometry && r.geometry.length ? r.geometry : routeShapes[r.routeId] || [],
+        stationIds: r.stationIds && r.stationIds.length ? r.stationIds : routeStopsMap[r.routeId] || []
       }));
       setDisplayedRoutes(routesWithShapes);
       if (!mockData.routes.find((r) => r.routeId === selectedRoute)) {
         setSelectedRoute(mockData.routes[0]?.routeId || "");
       }
     }
-  }, [feedSnapshot, selectedRoute, routeShapes]);
+  }, [feedSnapshot, selectedRoute, routeShapes, routeStopsMap]);
 
   const navigateTo = useCallback((routeKey) => {
     const path =
@@ -392,6 +420,9 @@ function App() {
               selectedRoute={selectedRoute}
               selectedStation={station}
               plannedRoute={plannedRoute}
+              selectedLanguage={selectedLanguage}
+              stopRoutesMap={stopRoutesMap}
+              stationTranslations={stationTranslations}
               onSelectRoute={setSelectedRoute}
               onSelectStation={setSelectedStation}
               isLive={liveVehicles.length > 0}

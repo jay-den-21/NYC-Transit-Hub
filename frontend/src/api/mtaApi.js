@@ -48,3 +48,12 @@ export const fetchRouteShapes = async () => {
   const { shapes } = await handleResponse(response);
   return shapes || {};
 };
+
+export const fetchRouteStops = async () => {
+  const response = await fetch(`${BASE_URL}/route-stops`);
+  const { routeStops, stopRoutes } = await handleResponse(response);
+  return {
+    routeStops: routeStops || {},
+    stopRoutes: stopRoutes || {}
+  };
+};

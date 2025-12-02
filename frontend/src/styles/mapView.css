@@ -52,6 +52,24 @@
   box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.4);
 }
 
+.station-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.station-icon__glyph {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 10px;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.25);
+}
+
 .map-overlay {
   position: absolute;
   right: 1.5rem;

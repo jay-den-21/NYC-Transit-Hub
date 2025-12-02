@@ -14,12 +14,71 @@ const ROUTE_COLORS = {
 const getRouteColor = (routeId) =>
   ROUTE_COLORS[routeId] ?? ROUTE_COLORS.ACE ?? "#2563eb";
 
+const simpleTranslateName = (name, lang) => {
+  if (!name || lang === "en") return name;
+  const zhProper = [
+    [/Times Square/gi, "时代广场"],
+    [/Bryant Park/gi, "布莱恩特公园"],
+    [/Grand Central/gi, "中央车站"],
+    [/Port Authority Bus Terminal/gi, "港务局汽车站"],
+    [/Penn Station/gi, "宾州车站"],
+    [/Columbus Circle/gi, "哥伦布圆环"],
+    [/Fulton St/gi, "富尔顿街"],
+    [/World Trade Center/gi, "世贸中心"],
+    [/Lexington Av/gi, "列克星敦大道"],
+    [/Herald Sq/gi, "先驱广场"],
+    [/Queens Plaza/gi, "皇后广场"],
+    [/Forest Hills/gi, "森林小丘"],
+    [/Jamaica/gi, "牙买加"]
+  ];
+  const esProper = [
+    [/Port Authority Bus Terminal/gi, "Terminal de Autobuses Port Authority"],
+    [/Penn Station/gi, "Estación Penn"],
+    [/Times Square/gi, "Times Square"],
+    [/Grand Central/gi, "Grand Central"],
+    [/Fulton St/gi, "Calle Fulton"],
+    [/World Trade Center/gi, "World Trade Center"],
+    [/Queens Plaza/gi, "Queens Plaza"],
+    [/Forest Hills/gi, "Forest Hills"],
+    [/Jamaica/gi, "Jamaica"],
+    [/Herald Sq/gi, "Herald Sq"],
+    [/Columbus Circle/gi, "Columbus Circle"],
+    [/Bryant Park/gi, "Bryant Park"]
+  ];
+  let translated = name;
+  if (lang === "es") {
+    esProper.forEach(([re, rep]) => {
+      translated = translated.replace(re, rep);
+    });
+    translated = translated
+      .replace(/St\b/gi, "Calle")
+      .replace(/Av\b/gi, "Av.")
+      .replace(/Station/gi, "Estación")
+      .replace(/Park/gi, "Parque")
+      .replace(/Center/gi, "Centro");
+  } else if (lang === "zh") {
+    zhProper.forEach(([re, rep]) => {
+      translated = translated.replace(re, rep);
+    });
+    translated = translated
+      .replace(/Station/gi, "车站")
+      .replace(/St\b/gi, "街")
+      .replace(/Av\b/gi, "大道")
+      .replace(/Park/gi, "公园")
+      .replace(/Center/gi, "中心");
+  }
+  return translated;
+};
+
 function MapView({
   routes,
   vehicles,
   selectedRoute,
   selectedStation,
   plannedRoute,
+  selectedLanguage,
+  stopRoutesMap,
+  stationTranslations,
   onSelectRoute,
   onSelectStation,
   isLive,
@@ -56,16 +115,27 @@ function MapView({
   }, [vehicles, selectedRoute]);
 
   const filteredStops = useMemo(() => {
-    const selectedRouteMeta = routes.find(
-      (route) => route.routeId === selectedRoute
-    );
-    if (selectedRouteMeta) {
-      return allStops.filter((stop) =>
-        selectedRouteMeta.stationIds.includes(stop.id)
-      );
-    }
-    return allStops;
-  }, [allStops, routes, selectedRoute]);
+    const selectedRouteMeta = routes.find((route) => route.routeId === selectedRoute);
+    const stationIds = selectedRouteMeta?.stationIds ?? [];
+
+    const belongsToRoute = (stopId) => {
+      if (stationIds.length) return stationIds.includes(stopId);
+      const routesServing = stopRoutesMap?.[stopId] || [];
+      return routesServing.includes(selectedRoute);
+    };
+
+    return allStops
+      .filter((stop) => belongsToRoute(stop.id))
+      .map((stop) => {
+        const baseStopId = stop.id?.replace(/[NS]$/, "") || stop.id;
+        const translationKey = `${baseStopId}:${selectedLanguage?.code || "en"}`;
+        const localizedName =
+          stationTranslations?.get?.(translationKey) ||
+          simpleTranslateName(stop.localizedName || stop.name, selectedLanguage?.code || "en");
+        const routesServing = stopRoutesMap?.[stop.id] || stop.routes || [];
+        return { ...stop, localizedName, routes: routesServing };
+      });
+  }, [allStops, routes, selectedRoute, selectedLanguage, stationTranslations, stopRoutesMap]);
 
   useEffect(() => {
     if (mapInstanceRef.current || !mapContainerRef.current) {
@@ -136,18 +206,23 @@ function MapView({
 
     filteredStops.forEach((station) => {
       const isActive = station.id === selectedStation?.stationId;
-      const marker = L.circleMarker([station.lat, station.lon], {
-        radius: isActive ? 10 : 8,
-        color: isActive ? "#1d4ed8" : "rgba(15, 23, 42, 0.35)",
-        weight: isActive ? 4 : 2,
-        fillColor: isActive ? "#3b82f6" : "#f8fafc",
-        fillOpacity: isActive ? 0.85 : 0.9
+      const color = getRouteColor(selectedRoute);
+      const marker = L.marker([station.lat, station.lon], {
+        icon: L.divIcon({
+          className: `station-icon ${isActive ? "active" : ""}`,
+          html: `<span class="station-icon__glyph" style="background:${color}">🚉</span>`,
+          iconSize: [16, 16],
+          iconAnchor: [8, 8]
+        })
       });
-      marker.bindTooltip(station.name, {
-        direction: "top",
-        offset: [0, -8]
-      });
-      marker.on("click", () => onSelectStation({ stationId: station.id, localizedName: station.name }));
+      const stationName = station.localizedName || station.name;
+      const routeList = station.routes?.length ? `Lines: ${station.routes.join(", ")}` : "";
+      marker.bindPopup(
+        `<strong>${stationName}</strong><br/>${station.id}${routeList ? `<br/>${routeList}` : ""}`
+      );
+      marker.on("click", () =>
+        onSelectStation({ stationId: station.id, localizedName: stationName })
+      );
       marker.addTo(overlays.stationsLayer);
       if (selectedRouteMeta?.stationIds?.includes(station.id)) {
         bounds.push([station.lat, station.lon]);
@@ -357,6 +432,12 @@ MapView.propTypes = {
       lon: PropTypes.number
     })
   }),
+  selectedLanguage: PropTypes.shape({
+    code: PropTypes.string,
+    name: PropTypes.string
+  }),
+  stopRoutesMap: PropTypes.object,
+  stationTranslations: PropTypes.instanceOf(Map),
   onSelectRoute: PropTypes.func.isRequired,
   onSelectStation: PropTypes.func.isRequired,
   isLive: PropTypes.bool,
@@ -368,6 +449,9 @@ MapView.propTypes = {
 MapView.defaultProps = {
   selectedStation: null,
   plannedRoute: null,
+  selectedLanguage: null,
+  stopRoutesMap: {},
+  stationTranslations: new Map(),
   isLive: false,
   liveFeedName: "",
   liveUpdatedAt: "",
