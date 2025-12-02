@@ -19,6 +19,7 @@ function MapView({
   vehicles,
   selectedRoute,
   selectedStation,
+  plannedRoute,
   onSelectRoute,
   onSelectStation,
   isLive,
@@ -33,7 +34,8 @@ function MapView({
   const overlaysRef = useRef({
     routesLayer: null,
     stationsLayer: null,
-    vehiclesLayer: null
+    vehiclesLayer: null,
+    plannedLayer: null
   });
 
   useEffect(() => {
@@ -49,9 +51,9 @@ function MapView({
   }, [selectedStation]);
 
   const filteredVehicles = useMemo(() => {
-    if (isLive) return vehicles;
+    if (!selectedRoute) return vehicles;
     return vehicles.filter((vehicle) => vehicle.routeId === selectedRoute);
-  }, [vehicles, selectedRoute, isLive]);
+  }, [vehicles, selectedRoute]);
 
   const filteredStops = useMemo(() => {
     const selectedRouteMeta = routes.find(
@@ -90,6 +92,7 @@ function MapView({
     overlaysRef.current.routesLayer = L.layerGroup().addTo(map);
     overlaysRef.current.stationsLayer = L.layerGroup().addTo(map);
     overlaysRef.current.vehiclesLayer = L.layerGroup().addTo(map);
+    overlaysRef.current.plannedLayer = L.layerGroup().addTo(map);
 
     mapInstanceRef.current = map;
 
@@ -109,6 +112,7 @@ function MapView({
     overlays.routesLayer.clearLayers();
     overlays.stationsLayer.clearLayers();
     overlays.vehiclesLayer.clearLayers();
+    overlays.plannedLayer?.clearLayers();
 
     const bounds = [];
     const selectedRouteMeta = routes.find(
@@ -116,15 +120,17 @@ function MapView({
     );
 
     routes.forEach((route) => {
-      const polyline = L.polyline(route.geometry, {
-        color: getRouteColor(route.routeId),
-        weight: route.routeId === selectedRoute ? 6 : 3,
-        opacity: route.routeId === selectedRoute ? 0.9 : 0.4,
-        dashArray: route.routeId === selectedRoute ? undefined : "6 8"
-      });
-      polyline.addTo(overlays.routesLayer);
-      if (route.routeId === selectedRoute) {
-        route.geometry.forEach((point) => bounds.push(point));
+      if (route.geometry && route.geometry.length > 0) {
+        const polyline = L.polyline(route.geometry, {
+          color: getRouteColor(route.routeId),
+          weight: route.routeId === selectedRoute ? 6 : 3,
+          opacity: route.routeId === selectedRoute ? 0.9 : 0.4,
+          dashArray: route.routeId === selectedRoute ? undefined : "6 8"
+        });
+        polyline.addTo(overlays.routesLayer);
+        if (route.routeId === selectedRoute) {
+          route.geometry.forEach((point) => bounds.push(point));
+        }
       }
     });
 
@@ -153,9 +159,9 @@ function MapView({
       const marker = L.marker([vehicle.lat, vehicle.lon], {
         icon: L.divIcon({
           className: "vehicle-icon",
-          html: `<span class="vehicle-icon__label">${vehicle.headsign || vehicle.routeId || "Train"}${vehicle.isEstimated ? " • est" : ""}</span>`,
-          iconSize: [60, 24],
-          iconAnchor: [30, 12]
+          html: `<span class="vehicle-icon__glyph" title="${vehicle.routeId || "Train"}">🚆</span>`,
+          iconSize: [22, 22],
+          iconAnchor: [11, 11]
         })
       });
       marker.bindPopup(
@@ -164,6 +170,45 @@ function MapView({
       marker.addTo(overlays.vehiclesLayer);
       bounds.push([vehicle.lat, vehicle.lon]);
     });
+
+    if (plannedRoute?.start && plannedRoute?.end && overlays.plannedLayer) {
+      const startStop = allStops.find((s) => s.id === plannedRoute.start.id);
+      const endStop = allStops.find((s) => s.id === plannedRoute.end.id);
+      if (startStop && endStop) {
+        const line = L.polyline(
+          [
+            [startStop.lat, startStop.lon],
+            [endStop.lat, endStop.lon]
+          ],
+          {
+            color: "#10b981",
+            weight: 5,
+            opacity: 0.8,
+            dashArray: "6 6"
+          }
+        ).addTo(overlays.plannedLayer);
+        const startMarker = L.circleMarker([startStop.lat, startStop.lon], {
+          radius: 10,
+          color: "#10b981",
+          weight: 3,
+          fillColor: "#10b981",
+          fillOpacity: 0.7
+        }).addTo(overlays.plannedLayer);
+        startMarker.bindTooltip(`Origin: ${startStop.name}`, { direction: "top" });
+
+        const endMarker = L.circleMarker([endStop.lat, endStop.lon], {
+          radius: 10,
+          color: "#2563eb",
+          weight: 3,
+          fillColor: "#2563eb",
+          fillOpacity: 0.7
+        }).addTo(overlays.plannedLayer);
+        endMarker.bindTooltip(`Destination: ${endStop.name}`, { direction: "top" });
+
+        bounds.push([startStop.lat, startStop.lon], [endStop.lat, endStop.lon]);
+        map.fitBounds(line.getBounds(), { padding: [40, 40] });
+      }
+    }
 
     if (bounds.length > 0) {
       map.fitBounds(bounds, { padding: [30, 30] });
@@ -174,6 +219,7 @@ function MapView({
     filteredVehicles,
     selectedRoute,
     selectedStation,
+    plannedRoute,
     onSelectStation,
     isLive
   ]);
@@ -277,7 +323,8 @@ MapView.propTypes = {
       shortName: PropTypes.string.isRequired,
       geometry: PropTypes.arrayOf(
         PropTypes.arrayOf(PropTypes.number.isRequired).isRequired
-      ).isRequired
+      ),
+      stationIds: PropTypes.arrayOf(PropTypes.string)
     })
   ).isRequired,
   vehicles: PropTypes.arrayOf(
@@ -296,6 +343,20 @@ MapView.propTypes = {
     stationId: PropTypes.string.isRequired,
     localizedName: PropTypes.string.isRequired
   }),
+  plannedRoute: PropTypes.shape({
+    start: PropTypes.shape({
+      id: PropTypes.string.isRequired,
+      name: PropTypes.string,
+      lat: PropTypes.number,
+      lon: PropTypes.number
+    }),
+    end: PropTypes.shape({
+      id: PropTypes.string.isRequired,
+      name: PropTypes.string,
+      lat: PropTypes.number,
+      lon: PropTypes.number
+    })
+  }),
   onSelectRoute: PropTypes.func.isRequired,
   onSelectStation: PropTypes.func.isRequired,
   isLive: PropTypes.bool,
@@ -306,6 +367,7 @@ MapView.propTypes = {
 
 MapView.defaultProps = {
   selectedStation: null,
+  plannedRoute: null,
   isLive: false,
   liveFeedName: "",
   liveUpdatedAt: "",

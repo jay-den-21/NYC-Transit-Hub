@@ -139,25 +139,39 @@
   color: rgba(226, 232, 240, 0.75);
 }
 
+.planned-route-legend {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.85rem;
+  color: rgba(226, 232, 240, 0.85);
+}
+
+.planned-route-swatch {
+  width: 16px;
+  height: 6px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #10b981, #2563eb);
+}
+
 .vehicle-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
-.vehicle-icon__label {
+.vehicle-icon__glyph {
   display: inline-flex;
+  width: 22px;
+  height: 22px;
   align-items: center;
   justify-content: center;
-  padding: 0.35rem 0.75rem;
-  border-radius: 999px;
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.95), rgba(14, 165, 233, 0.95));
+  border-radius: 50%;
+  background: #0ea5e9;
+  box-shadow: 0 6px 12px rgba(14, 165, 233, 0.35);
   color: #fff;
-  font-size: 0.75rem;
-  font-weight: 600;
-  box-shadow:
-    0 8px 18px rgba(37, 99, 235, 0.25),
-    0 0 0 1px rgba(15, 23, 42, 0.25);
+  font-size: 12px;
+  line-height: 1;
 }
 
 @media (max-width: 1024px) {

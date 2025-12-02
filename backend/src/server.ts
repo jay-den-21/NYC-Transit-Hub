@@ -2,6 +2,9 @@ import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import feedsRouter from "./routes/feeds.js";
 import stopsRouter from "./routes/stops.js";
+import geocodeRouter from "./routes/geocode.js";
+import accessibilityRouter from "./routes/accessibility.js";
+import routeShapesRouter from "./routes/routeShapes.js";
 import { initializeDatabase } from "./db/dbManager.js";
 import { getPool } from "./db/pool.js";
 import { deleteOlderThanMinutes } from "./repositories/feedRepository.js";
@@ -18,6 +21,9 @@ app.get("/health", (_req: Request, res: Response) => {
 
 app.use("/api/feeds", feedsRouter);
 app.use("/api/stops", stopsRouter);
+app.use("/api/geocode", geocodeRouter);
+app.use("/api/accessibility", accessibilityRouter);
+app.use("/api/route-shapes", routeShapesRouter);
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   // Fallback error handler to avoid exposing stack traces in responses

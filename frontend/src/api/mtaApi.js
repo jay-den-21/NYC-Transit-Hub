@@ -29,3 +29,22 @@ export const fetchStationVehicles = async (stationId) => {
     const response = await fetch(`${BASE_URL}/stops/${stationId}/vehicles`);
     return handleResponse(response);
 };
+
+export const geocodePlaces = async (query) => {
+  const params = new URLSearchParams({ query });
+  const response = await fetch(`${BASE_URL}/geocode?${params.toString()}`);
+  const { results } = await handleResponse(response);
+  return results ?? [];
+};
+
+export const fetchAccessibility = async (stationId) => {
+  const params = stationId ? `?stationId=${encodeURIComponent(stationId)}` : "";
+  const response = await fetch(`${BASE_URL}/accessibility${params}`);
+  return handleResponse(response);
+};
+
+export const fetchRouteShapes = async () => {
+  const response = await fetch(`${BASE_URL}/route-shapes`);
+  const { shapes } = await handleResponse(response);
+  return shapes || {};
+};

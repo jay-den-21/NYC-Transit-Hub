@@ -10,9 +10,16 @@ import UserPreferencesPanel from "./components/UserPreferencesPanel.jsx";
 import TransitMetrics from "./components/TransitMetrics.jsx";
 import LanguageSwitcher from "./components/LanguageSwitcher.jsx";
 import RouteGuidePanel from "./components/RouteGuidePanel.jsx";
-import { fetchFeedList, fetchFeedSnapshot } from "./api/mtaApi.js";
+import PreferencesPage from "./components/PreferencesPage.jsx";
+import { fetchFeedList, fetchFeedSnapshot, fetchAccessibility, fetchRouteShapes } from "./api/mtaApi.js";
 import { mockData } from "./data/mockData.js";
 import "./styles/app.css";
+
+const normalizeRoute = (pathValue) => {
+  if (pathValue.startsWith("/guidance")) return "guidance";
+  if (pathValue.startsWith("/preferences")) return "preferences";
+  return "home";
+};
 
 function App() {
   const [selectedLanguage, setSelectedLanguage] = useState(
@@ -29,6 +36,27 @@ function App() {
   const [feedSnapshot, setFeedSnapshot] = useState(null);
   const [feedLoading, setFeedLoading] = useState(false);
   const [feedError, setFeedError] = useState("");
+  const [activeRoute, setActiveRoute] = useState(
+    normalizeRoute(window.location.pathname || "/")
+  );
+  const [plannedRoute, setPlannedRoute] = useState(null);
+  const [displayedRoutes, setDisplayedRoutes] = useState(mockData.routes);
+  const [routeShapes, setRouteShapes] = useState({});
+  const emptyAccessibility = useMemo(
+    () => ({ currentOutages: [], upcomingOutages: [], equipments: [] }),
+    []
+  );
+  const [accessibilityState, setAccessibilityState] = useState({
+    data: emptyAccessibility,
+    loading: false,
+    error: ""
+  });
+  const [guidanceOutages, setGuidanceOutages] = useState({
+    start: [],
+    end: [],
+    loading: false,
+    error: ""
+  });
 
   const localizedStations = useMemo(() => {
     return mockData.stations.map((station) => {
@@ -60,6 +88,14 @@ function App() {
   const serviceSummary = mockData.serviceStatus.filter(
     (status) => status.routeId === selectedRoute
   );
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setActiveRoute(normalizeRoute(window.location.pathname || "/"));
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   useEffect(() => {
     const loadFeeds = async () => {
@@ -100,6 +136,106 @@ function App() {
   useEffect(() => {
     loadSnapshot(selectedFeedId);
   }, [selectedFeedId, loadSnapshot]);
+
+  useEffect(() => {
+    fetchRouteShapes()
+      .then((shapes) => setRouteShapes(shapes))
+      .catch(() => setRouteShapes({}));
+  }, []);
+
+  useEffect(() => {
+    const stationId = selectedStation?.stationId;
+    if (!stationId) {
+      setAccessibilityState({ data: emptyAccessibility, loading: false, error: "" });
+      return;
+    }
+    setAccessibilityState((prev) => ({ ...prev, loading: true, error: "" }));
+    fetchAccessibility(stationId)
+      .then((data) => setAccessibilityState({ data, loading: false, error: "" }))
+      .catch((error) =>
+        setAccessibilityState({
+          data: emptyAccessibility,
+          loading: false,
+          error: error.message || "Unable to load accessibility data"
+        })
+      );
+  }, [selectedStation, emptyAccessibility]);
+
+  useEffect(() => {
+    const startId = plannedRoute?.start?.id;
+    const endId = plannedRoute?.end?.id;
+    if (!startId && !endId) {
+      setGuidanceOutages({ start: [], end: [], loading: false, error: "" });
+      return;
+    }
+    setGuidanceOutages((prev) => ({ ...prev, loading: true, error: "" }));
+    Promise.all([
+      startId ? fetchAccessibility(startId) : Promise.resolve(emptyAccessibility),
+      endId ? fetchAccessibility(endId) : Promise.resolve(emptyAccessibility)
+    ])
+      .then(([startData, endData]) => {
+        setGuidanceOutages({
+          start: startData.currentOutages || [],
+          end: endData.currentOutages || [],
+          loading: false,
+          error: ""
+        });
+      })
+      .catch((error) =>
+        setGuidanceOutages({
+          start: [],
+          end: [],
+          loading: false,
+          error: error.message || "Unable to check accessibility for your route"
+        })
+      );
+  }, [plannedRoute, emptyAccessibility]);
+
+  useEffect(() => {
+    if (feedSnapshot?.routes?.length) {
+      const incoming = feedSnapshot.routes.map((routeId) => {
+        const preset = mockData.routes.find((r) => r.routeId === routeId);
+        const geometry = routeShapes[routeId] || preset?.geometry || [];
+        return (
+          preset || {
+            routeId,
+            shortName: `${routeId} Line`,
+            longName: `${routeId} Line`,
+            geometry,
+            stationIds: []
+          }
+        );
+      });
+      setDisplayedRoutes(incoming);
+      if (!incoming.find((r) => r.routeId === selectedRoute)) {
+        setSelectedRoute(incoming[0]?.routeId || "");
+      }
+    } else {
+      const routesWithShapes = mockData.routes.map((r) => ({
+        ...r,
+        geometry: r.geometry && r.geometry.length ? r.geometry : routeShapes[r.routeId] || []
+      }));
+      setDisplayedRoutes(routesWithShapes);
+      if (!mockData.routes.find((r) => r.routeId === selectedRoute)) {
+        setSelectedRoute(mockData.routes[0]?.routeId || "");
+      }
+    }
+  }, [feedSnapshot, selectedRoute, routeShapes]);
+
+  const navigateTo = useCallback((routeKey) => {
+    const path =
+      routeKey === "guidance"
+        ? "/guidance"
+        : routeKey === "preferences"
+          ? "/preferences"
+          : "/";
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, "", path);
+      setActiveRoute(normalizeRoute(path));
+    } else {
+      setActiveRoute(normalizeRoute(path));
+    }
+  }, []);
 
   const liveVehicles = useMemo(() => {
     if (!feedSnapshot?.vehicles) return [];
@@ -166,9 +302,74 @@ function App() {
   const liveUpdatedAt = feedSnapshot?.updatedAt ?? "";
   const liveVehicleCount = feedSnapshot?.vehicles?.length ?? 0;
 
+  const navTabs = (
+    <div className="nav-tabs">
+      <button
+        type="button"
+        className={`nav-tab ${activeRoute === "home" ? "active" : ""}`}
+        onClick={() => navigateTo("home")}
+      >
+        Map
+      </button>
+      <button
+        type="button"
+        className={`nav-tab ${activeRoute === "guidance" ? "active" : ""}`}
+        onClick={() => navigateTo("guidance")}
+      >
+        Guidance
+      </button>
+      <button
+        type="button"
+        className={`nav-tab ${activeRoute === "preferences" ? "active" : ""}`}
+        onClick={() => navigateTo("preferences")}
+      >
+        Preferences
+      </button>
+    </div>
+  );
+
+  if (activeRoute === "guidance") {
+    return (
+      <div className="app-shell">
+        <Header />
+        {navTabs}
+        <main className="app-main guidance-main">
+          <section className="map-card guidance-card">
+            <RouteGuidePanel
+              selectedStationId={selectedStation?.stationId ?? ""}
+              onSelectStation={setSelectedStation}
+              onPlanRoute={setPlannedRoute}
+              guidanceStatus={guidanceOutages}
+            />
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (activeRoute === "preferences") {
+    return (
+      <div className="app-shell">
+        <Header />
+        {navTabs}
+        <main className="app-main guidance-main">
+          <section className="map-card guidance-card">
+            <PreferencesPage
+              languages={mockData.supportedLanguages}
+              homeStations={localizedStations}
+              initialLanguage={selectedLanguage}
+              onLanguageChange={setSelectedLanguage}
+            />
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <Header />
+      {navTabs}
 
       <main className="app-main">
         <section className="primary-panel">
@@ -186,10 +387,11 @@ function App() {
             </div>
 
             <MapView
-              routes={mockData.routes}
+              routes={displayedRoutes}
               vehicles={mapVehicles}
               selectedRoute={selectedRoute}
               selectedStation={station}
+              plannedRoute={plannedRoute}
               onSelectRoute={setSelectedRoute}
               onSelectStation={setSelectedStation}
               isLive={liveVehicles.length > 0}
@@ -203,10 +405,6 @@ function App() {
         </section>
 
         <aside className="secondary-panel">
-          <RouteGuidePanel
-            selectedStationId={selectedStation?.stationId ?? ""}
-            onSelectStation={setSelectedStation}
-          />
           <RealtimeFeedPanel
             feeds={feedList}
             selectedFeed={selectedFeedId}
@@ -220,9 +418,20 @@ function App() {
           <FavoritesPanel favorites={routeFavorites} />
           <AlertsPanel alerts={activeAlerts} />
           <AccessibilityPanel
-            accessibility={mockData.stationAccessibility.filter(
-              (item) => item.stationId === selectedStation?.stationId
-            )}
+            station={station}
+            accessibilityState={accessibilityState}
+            guidance={
+              plannedRoute
+                ? {
+                    start: plannedRoute.start,
+                    end: plannedRoute.end,
+                    startOutages: guidanceOutages.start,
+                    endOutages: guidanceOutages.end,
+                    loading: guidanceOutages.loading,
+                    error: guidanceOutages.error
+                  }
+                : null
+            }
           />
           <UserPreferencesPanel
             preferences={mockData.userPreference}

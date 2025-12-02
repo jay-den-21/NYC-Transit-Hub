@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import PropTypes from "prop-types";
-import { fetchAllStops, fetchStationVehicles } from "../api/mtaApi.js";
+import { fetchAllStops, fetchStationVehicles, geocodePlaces } from "../api/mtaApi.js";
+import { useMemo } from "react";
 
 const formatDistance = (distanceInDegrees) => {
   const distanceKm = distanceInDegrees * 111; // Approx conversion for NYC latitudes
@@ -18,15 +19,21 @@ const formatTime = (value) => {
 
 const emptyVehicles = { upcoming: [], past: [] };
 
-function RouteGuidePanel({ onSelectStation, selectedStationId }) {
+function RouteGuidePanel({ onSelectStation, selectedStationId, onPlanRoute, guidanceStatus }) {
   const [stops, setStops] = useState([]);
   const [loadingStops, setLoadingStops] = useState(false);
   const [stopsError, setStopsError] = useState("");
 
-  const [fromLat, setFromLat] = useState("");
-  const [fromLon, setFromLon] = useState("");
-  const [toLat, setToLat] = useState("");
-  const [toLon, setToLon] = useState("");
+  const [fromQuery, setFromQuery] = useState("");
+  const [toQuery, setToQuery] = useState("");
+  const [fromSelection, setFromSelection] = useState(null);
+  const [toSelection, setToSelection] = useState(null);
+  const [myLocation, setMyLocation] = useState({
+    lat: null,
+    lon: null,
+    loading: false,
+    error: ""
+  });
   const [formError, setFormError] = useState("");
 
   const [routeStops, setRouteStops] = useState({ start: null, end: null });
@@ -35,6 +42,9 @@ function RouteGuidePanel({ onSelectStation, selectedStationId }) {
     error: "",
     data: emptyVehicles
   });
+  const [placeResults, setPlaceResults] = useState([]);
+  const [placeLoading, setPlaceLoading] = useState(false);
+  const [placeError, setPlaceError] = useState("");
 
   useEffect(() => {
     const loadStops = async () => {
@@ -52,6 +62,41 @@ function RouteGuidePanel({ onSelectStation, selectedStationId }) {
 
     loadStops();
   }, []);
+  useEffect(() => {
+    const fetchPlaces = async () => {
+      const query = toQuery.trim();
+      if (query.length < 3 || toSelection) {
+        setPlaceResults([]);
+        setPlaceLoading(false);
+        return;
+      }
+      setPlaceLoading(true);
+      setPlaceError("");
+      try {
+        const results = await geocodePlaces(query);
+        setPlaceResults(results);
+      } catch (error) {
+        setPlaceError(error.message || "Unable to search places right now.");
+      } finally {
+        setPlaceLoading(false);
+      }
+    };
+
+    fetchPlaces();
+    return undefined;
+  }, [toQuery, toSelection]);
+
+  const filterStops = (query) => {
+    if (!query || query.length < 2) return [];
+    const normalized = query.toLowerCase();
+    return stops
+      .filter(
+        (stop) =>
+          stop.name.toLowerCase().includes(normalized) ||
+          stop.id.toLowerCase().includes(normalized)
+      )
+      .slice(0, 6);
+  };
 
   const findNearestStop = (lat, lon) => {
     return stops.reduce(
@@ -84,36 +129,60 @@ function RouteGuidePanel({ onSelectStation, selectedStationId }) {
     }
   };
 
+  const setCurrentLocation = () => {
+    if (!navigator?.geolocation) {
+      setMyLocation((prev) => ({ ...prev, error: "Geolocation not supported in this browser." }));
+      return;
+    }
+    setMyLocation({ lat: null, lon: null, loading: true, error: "" });
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setMyLocation({
+          lat: position.coords.latitude,
+          lon: position.coords.longitude,
+          loading: false,
+          error: ""
+        });
+        setFromSelection(null);
+        setFromQuery("Current location");
+      },
+      (error) => {
+        setMyLocation({ lat: null, lon: null, loading: false, error: error.message });
+      }
+    );
+  };
+
   const handlePlanRoute = async (event) => {
     event.preventDefault();
     setFormError("");
-
-    const startLat = Number(fromLat);
-    const startLon = Number(fromLon);
-    const destLat = Number(toLat);
-    const destLon = Number(toLon);
-
-    const coordsAreValid =
-      Number.isFinite(startLat) &&
-      Number.isFinite(startLon) &&
-      Number.isFinite(destLat) &&
-      Number.isFinite(destLon);
-
-    if (!coordsAreValid) {
-      setFormError("Enter valid numeric latitude/longitude for both points.");
-      return;
-    }
+    setPlaceError("");
 
     if (!stops.length) {
       setFormError("Stops have not loaded yet. Try again in a moment.");
       return;
     }
 
-    const startResult = findNearestStop(startLat, startLon);
-    const endResult = findNearestStop(destLat, destLon);
+    let startResult = null;
+    let endResult = null;
 
-    if (!startResult.stop || !endResult.stop) {
-      setFormError("Could not match nearby stations. Check your coordinates.");
+    if (fromSelection) {
+      startResult = { stop: fromSelection, distance: 0 };
+    } else if (Number.isFinite(myLocation.lat) && Number.isFinite(myLocation.lon)) {
+      startResult = findNearestStop(myLocation.lat, myLocation.lon);
+    } else {
+      setFormError("Pick an origin station or use your current location.");
+      return;
+    }
+
+    if (toSelection) {
+      endResult = { stop: toSelection, distance: 0 };
+    } else {
+      setFormError("Pick a destination station from the list.");
+      return;
+    }
+
+    if (!startResult?.stop || !endResult?.stop) {
+      setFormError("Could not match nearby stations. Try again.");
       return;
     }
 
@@ -122,74 +191,143 @@ function RouteGuidePanel({ onSelectStation, selectedStationId }) {
       stationId: startResult.stop.id,
       localizedName: startResult.stop.name
     });
+    onPlanRoute?.({
+      start: startResult.stop,
+      end: endResult.stop
+    });
     await loadStationVehicles(startResult.stop.id);
   };
 
   const activeStartName = routeStops.start?.stop?.name ?? "Start station";
+  const hasGuidanceIssues =
+    Boolean(guidanceStatus?.start?.length) || Boolean(guidanceStatus?.end?.length);
+  const alternateStation = useMemo(() => {
+    if (!routeStops.start?.stop || !stops.length) return null;
+    const origin = routeStops.start.stop;
+    const candidates = stops
+      .filter((s) => s.id !== origin.id)
+      .map((s) => ({
+        ...s,
+        distance: Math.hypot(origin.lat - s.lat, origin.lon - s.lon)
+      }))
+      .sort((a, b) => a.distance - b.distance);
+    return candidates[0] || null;
+  }, [routeStops.start, stops]);
 
   return (
     <div className="panel-card">
       <div className="panel-header">
         <div>
           <h3>Route Guide</h3>
-          <span>Pick nearest stations from typed coordinates</span>
+          <span>Search places, snap to nearest stations</span>
         </div>
         {selectedStationId && <span className="tag">On map</span>}
       </div>
 
       <form className="route-guide" onSubmit={handlePlanRoute}>
-        <div className="route-guide__row">
-          <div className="route-guide__field">
-            <label htmlFor="from-lat">From latitude</label>
+        <div className="route-guide__field">
+          <label htmlFor="from-search">From (station or place)</label>
+          <div className="route-guide__search">
             <input
-              id="from-lat"
-              name="from-lat"
-              type="number"
-              step="any"
-              placeholder="40.75"
-              value={fromLat}
-              onChange={(event) => setFromLat(event.target.value)}
+              id="from-search"
+              name="from-search"
+              type="text"
+              placeholder="Start typing a station…"
+              value={fromQuery}
+              onChange={(event) => {
+                setFromQuery(event.target.value);
+                setFromSelection(null);
+              }}
             />
+            <button
+              className="route-guide__pill"
+              type="button"
+              onClick={setCurrentLocation}
+              disabled={myLocation.loading}
+            >
+              {myLocation.loading ? "Locating…" : "Use my location"}
+            </button>
           </div>
-          <div className="route-guide__field">
-            <label htmlFor="from-lon">From longitude</label>
-            <input
-              id="from-lon"
-              name="from-lon"
-              type="number"
-              step="any"
-              placeholder="-73.99"
-              value={fromLon}
-              onChange={(event) => setFromLon(event.target.value)}
-            />
-          </div>
+          {myLocation.error && <div className="info-banner error">{myLocation.error}</div>}
+          {!fromSelection && fromQuery.length >= 2 && (
+            <div className="route-guide__suggestions">
+              {filterStops(fromQuery).map((stop) => (
+                <button
+                  key={stop.id}
+                  type="button"
+                  className="route-guide__suggestion"
+                  onClick={() => {
+                    setFromSelection(stop);
+                    setFromQuery(stop.name);
+                    setMyLocation((prev) => ({ ...prev, lat: null, lon: null }));
+                  }}
+                >
+                  <span className="route-guide__name">{stop.name}</span>
+                  <span className="route-guide__meta">{stop.id}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="route-guide__row">
-          <div className="route-guide__field">
-            <label htmlFor="to-lat">To latitude</label>
-            <input
-              id="to-lat"
-              name="to-lat"
-              type="number"
-              step="any"
-              placeholder="40.70"
-              value={toLat}
-              onChange={(event) => setToLat(event.target.value)}
-            />
-          </div>
-          <div className="route-guide__field">
-            <label htmlFor="to-lon">To longitude</label>
-            <input
-              id="to-lon"
-              name="to-lon"
-              type="number"
-              step="any"
-              placeholder="-73.98"
-              value={toLon}
-              onChange={(event) => setToLon(event.target.value)}
-            />
-          </div>
+        <div className="route-guide__field">
+          <label htmlFor="to-search">To (station or place)</label>
+          <input
+            id="to-search"
+            name="to-search"
+            type="text"
+            placeholder="Where are you heading?"
+            value={toQuery}
+            onChange={(event) => {
+              setToQuery(event.target.value);
+              setToSelection(null);
+              setPlaceResults([]);
+            }}
+          />
+          {placeError && <div className="info-banner error">{placeError}</div>}
+          {placeLoading && <div className="info-banner">Searching places…</div>}
+          {!toSelection && placeResults.length > 0 && (
+            <div className="route-guide__suggestions">
+              {placeResults.map((place, index) => {
+                const nearest = findNearestStop(place.lat, place.lon);
+                if (!nearest.stop) return null;
+                return (
+                  <button
+                    key={`${place.label}-${index}`}
+                    type="button"
+                    className="route-guide__suggestion"
+                    onClick={() => {
+                      setToSelection(nearest.stop);
+                      setToQuery(place.label);
+                    }}
+                  >
+                    <span className="route-guide__name">{place.label}</span>
+                    <span className="route-guide__meta">
+                      Nearest station: {nearest.stop.name}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {!toSelection && placeResults.length === 0 && toQuery.length >= 2 && !placeLoading && (
+            <div className="route-guide__suggestions">
+              {filterStops(toQuery).map((stop) => (
+                <button
+                  key={stop.id}
+                  type="button"
+                  className="route-guide__suggestion"
+                  onClick={() => {
+                    setToSelection(stop);
+                    setToQuery(stop.name);
+                  }}
+                >
+                  <span className="route-guide__name">{stop.name}</span>
+                  <span className="route-guide__meta">{stop.id}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {stopsError && <div className="info-banner error">{stopsError}</div>}
@@ -203,10 +341,30 @@ function RouteGuidePanel({ onSelectStation, selectedStationId }) {
             Find nearest stations
           </button>
           <span className="route-guide__hint">
-            Uses Euclidean distance on stop coordinates to snap to the closest stations.
+            Places come from free OpenStreetMap search; we snap to the closest stations.
           </span>
         </div>
       </form>
+
+      {routeStops.start?.stop && routeStops.end?.stop && (
+        <div
+          className={`info-banner ${!guidanceStatus?.loading && !guidanceStatus?.error && !hasGuidanceIssues ? "success" : ""}`}
+          style={{ marginTop: "0.5rem" }}
+        >
+          <strong>Guidance check</strong>
+          {guidanceStatus?.loading && <p>Checking accessibility for your route…</p>}
+          {guidanceStatus?.error && <p>{guidanceStatus.error}</p>}
+          {!guidanceStatus?.loading && !guidanceStatus?.error && (
+            <>
+              {hasGuidanceIssues ? (
+                <p>Outages detected on your route. Check Accessibility for details.</p>
+              ) : (
+                <p>NYC Transit Hub has checked for you! All accessibility facilities are in use.</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {routeStops.start?.stop && routeStops.end?.stop && (
         <div className="route-guide__results">
@@ -253,6 +411,11 @@ function RouteGuidePanel({ onSelectStation, selectedStationId }) {
           vehicleState.data.past.length === 0 && (
             <div className="info-banner">
               No recent vehicles for this station in the last few minutes.
+              {alternateStation && (
+                <p className="accessibility-details" style={{ marginTop: "0.35rem" }}>
+                  Try nearby station {alternateStation.name} ({formatDistance(alternateStation.distance)} away) for other lines.
+                </p>
+              )}
             </div>
           )}
 
@@ -301,12 +464,21 @@ function RouteGuidePanel({ onSelectStation, selectedStationId }) {
 
 RouteGuidePanel.propTypes = {
   onSelectStation: PropTypes.func,
-  selectedStationId: PropTypes.string
+  selectedStationId: PropTypes.string,
+  onPlanRoute: PropTypes.func,
+  guidanceStatus: PropTypes.shape({
+    start: PropTypes.array,
+    end: PropTypes.array,
+    loading: PropTypes.bool,
+    error: PropTypes.string
+  })
 };
 
 RouteGuidePanel.defaultProps = {
   onSelectStation: () => {},
-  selectedStationId: ""
+  selectedStationId: "",
+  onPlanRoute: null,
+  guidanceStatus: null
 };
 
 export default RouteGuidePanel;
